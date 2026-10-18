@@ -3,11 +3,11 @@ const { chromium } = require("playwright");
 
 const TARGETS = [
   {
-    name: "Admission Ticket",
+    name: "Admission Ticket — 入場券のみ",
     url: "https://cenacolovinciano.vivaticket.it/en/event/cenacolo-vinciano/151991"
   },
   {
-    name: "English Guided Tours",
+    name: "English Guided Tours — 英語ガイド付き",
     url: "https://cenacolovinciano.vivaticket.it/en/event/cenacolo-visite-guidate-a-orario-fisso-in-inglese/238363"
   }
 ];
@@ -26,79 +26,53 @@ const TARGETS = [
           waitUntil: "domcontentloaded",
           timeout: 60000
         });
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(2500);
 
-        // Cookie同意画面が出た場合は拒否を試す
-        const decline = page.getByText("I decline", { exact: true });
-        if (await decline.count()) {
-          try {
-            await decline.first().click({ timeout: 2000 });
-            await page.waitForTimeout(1000);
-          } catch {}
+        // 10月表示なら11月へ。11月表示ならそのまま。
+        const monthLabel = page.locator(".date-cal .month li.name");
+        let month = (await monthLabel.first().innerText()).trim();
+        console.log("初期表示月:", month);
+
+        if (month === "OCTOBER 2026") {
+          await page.locator(".date-cal .month li.next a").first().click();
+          await page.waitForTimeout(1500);
         }
 
-        const before = (await page.locator("body").innerText())
-          .match(/[A-Z]+ 2026/g) || [];
-        console.log("表示月（操作前）:", [...new Set(before)].join(", "));
+        month = (await monthLabel.first().innerText()).trim();
+        console.log("確認対象月:", month);
 
-        // カレンダーの「次の月」矢印を探す
-        const arrows = page.getByText("›", { exact: true });
-        console.log("› の候補数:", await arrows.count());
+        const days = await page.locator(".date-cal ul.days li.day").evaluateAll(
+          elements => elements.map(el => ({
+            day: el.textContent.trim(),
+            className: el.className,
+            title: el.getAttribute("title"),
+            clickable: !!el.querySelector("a, button") ||
+              getComputedStyle(el).cursor === "pointer"
+          }))
+        );
 
-        if (await arrows.count()) {
-          try {
-            await arrows.last().click({ timeout: 5000 });
-            await page.waitForTimeout(1500);
-          } catch (e) {
-            console.log("矢印クリック失敗:", e.message);
-          }
-        }
-
-        const after = (await page.locator("body").innerText())
-          .match(/[A-Z]+ 2026/g) || [];
-        console.log("表示月（操作後）:", [...new Set(after)].join(", "));
-
-        // カレンダー関連要素の構造と日付のクラスを調査
-        const info = await page.evaluate(() => {
-          const all = [...document.querySelectorAll("*")];
-          const month = all.find(el =>
-            el.children.length < 5 &&
-            /^(OCTOBER|NOVEMBER) 2026$/.test(
-              (el.innerText || "").trim()
-            )
-          );
-
-          let ancestor = month;
-          for (let i = 0; i < 4 && ancestor?.parentElement; i++) {
-            ancestor = ancestor.parentElement;
-          }
-
-          return {
-            monthElement: month ? {
-              tag: month.tagName,
-              className: String(month.className),
-              parentHTML: ancestor.outerHTML.slice(0, 7000)
-            } : null,
-            dateElements: all
-              .filter(el =>
-                el.children.length === 0 &&
-                /^(?:[1-9]|[12]\d|3[01])$/.test(
-                  (el.textContent || "").trim()
-                )
-              )
-              .slice(0, 45)
-              .map(el => ({
-                day: el.textContent.trim(),
-                tag: el.tagName,
-                className: String(el.className),
-                background: getComputedStyle(el).backgroundColor,
-                color: getComputedStyle(el).color,
-                parentClass: String(el.parentElement?.className || "")
-              }))
-          };
+        const targetDays = days.filter(d => {
+          const n = Number(d.day);
+          return n >= 15 && n <= 22;
         });
 
-        console.log("カレンダー構造:", JSON.stringify(info, null, 2));
+        console.log("11月15〜22日の状態:");
+        for (const d of targetDays) {
+          const unavailable =
+            d.className.includes("inactive") ||
+            d.className.includes("no-event");
+
+          console.log(JSON.stringify({
+            day: Number(d.day),
+            className: d.className,
+            title: d.title,
+            candidate: !unavailable
+          }));
+        }
+
+        console.log("予約ページ:", target.url);
+      } catch (e) {
+        console.log("ERROR:", e.message);
       } finally {
         await page.close();
       }
