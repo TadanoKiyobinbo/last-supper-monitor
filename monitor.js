@@ -90,4 +90,55 @@ async function main() {
             found.push({
               key,
               name: target.name,
-              day
+              day,
+              url: target.url,
+              className
+            });
+          }
+        }
+      } finally {
+        await page.close();
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+
+  // 今回初めて空き候補になった日だけ通知する。
+  // 前回 state.json がない場合は、初回通知を避けるため通知しない。
+  const hasPreviousState = Object.keys(previousState).length > 0;
+
+  const newItems = found.filter(item =>
+    hasPreviousState && previousState[item.key] === false
+  );
+
+  if (newItems.length) {
+    const body = newItems.map(item =>
+      `${item.name}\n2026年11月${item.day}日\n` +
+      `カレンダー状態: ${item.className}\n` +
+      `予約ページ: ${item.url}`
+    ).join("\n\n--------------------\n\n");
+
+    await transporter.sendMail({
+      from: emailUser,
+      to: emailUser,
+      subject: "【空き候補】最後の晩餐 予約カレンダー",
+      text:
+        "前回は空き候補がなかった日について、新しい候補が見つかりました。\n" +
+        "購入可能とは限らないため、予約ページで確認してください。\n\n" +
+        body
+    });
+
+    console.log("新しい空き候補をメール通知:", newItems.length);
+  } else {
+    console.log("新しい空き候補はありません");
+  }
+
+  // 今回確認した状態だけを次回に引き継ぐ。
+  fs.writeFileSync(STATE_FILE, JSON.stringify(currentState, null, 2));
+}
+
+main().catch(error => {
+  console.error(error);
+  process.exit(1);
+});
