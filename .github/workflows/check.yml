@@ -1,20 +1,34 @@
 
-name: Last Supper Calendar Diagnostic
+name: Last Supper Monitor
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
 
 permissions:
   contents: read
 
+concurrency:
+  group: last-supper-monitor
+  cancel-in-progress: false
+
 jobs:
-  diagnostic:
+  monitor:
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: Get repository
+      - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Restore notification state
+        uses: actions/cache@v4
+        with:
+          path: state.json
+          key: last-supper-state-${{ github.run_id }}
+          restore-keys: |
+            last-supper-state-
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -24,8 +38,11 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Install browser
+      - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Inspect ticket pages
+      - name: Run monitor
         run: npm run check
+        env:
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          ALERT_APP_PASSWORD: ${{ secrets.ALERT_APP_PASSWORD }}
