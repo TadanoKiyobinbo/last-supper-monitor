@@ -1,5 +1,7 @@
 
 const { chromium } = require("playwright");
+const nodemailer = require("nodemailer");
+const fs = require("fs");
 
 const TARGETS = [
   {
@@ -12,67 +14,83 @@ const TARGETS = [
   }
 ];
 
-(async () => {
+const STATE_FILE = "state.json";
+const state = fs.existsSync(STATE_FILE)
+  ? JSON.parse(fs.readFileSync(STATE_FILE, "utf8"))
+  : {};
+
+async function main() {
+  const emailUser = process.env.ALERT_EMAIL;
+  const emailPassword = process.env.ALERT_APP_PASSWORD;
+
+  if (!emailUser || !emailPassword) {
+    throw new Error("GitHub Secrets の ALERT_EMAIL / ALERT_APP_PASSWORD が未設定です");
+  }
+
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: { user: emailUser, pass: emailPassword }
+  });
+
   const browser = await chromium.launch({ headless: true });
+  const found = [];
 
   try {
     for (const target of TARGETS) {
       const page = await browser.newPage();
 
       try {
-        console.log("\n========== " + target.name + " ==========");
-
         await page.goto(target.url, {
           waitUntil: "domcontentloaded",
           timeout: 60000
         });
         await page.waitForTimeout(2500);
 
-        // 10月表示なら11月へ。11月表示ならそのまま。
-        const monthLabel = page.locator(".date-cal .month li.name");
-        let month = (await monthLabel.first().innerText()).trim();
-        console.log("初期表示月:", month);
+        const monthLabel = page.locator(".date-cal .month li.name").first();
+        let month = (await monthLabel.innerText()).trim();
 
+        // 10月なら11月へ。11月なら初期表示のまま。
         if (month === "OCTOBER 2026") {
           await page.locator(".date-cal .month li.next a").first().click();
           await page.waitForTimeout(1500);
         }
 
-        month = (await monthLabel.first().innerText()).trim();
-        console.log("確認対象月:", month);
-
-        const days = await page.locator(".date-cal ul.days li.day").evaluateAll(
-          elements => elements.map(el => ({
-            day: el.textContent.trim(),
-            className: el.className,
-            title: el.getAttribute("title"),
-            clickable: !!el.querySelector("a, button") ||
-              getComputedStyle(el).cursor === "pointer"
-          }))
-        );
-
-        const targetDays = days.filter(d => {
-          const n = Number(d.day);
-          return n >= 15 && n <= 22;
-        });
-
-        console.log("11月15〜22日の状態:");
-        for (const d of targetDays) {
-          const unavailable =
-            d.className.includes("inactive") ||
-            d.className.includes("no-event");
-
-          console.log(JSON.stringify({
-            day: Number(d.day),
-            className: d.className,
-            title: d.title,
-            candidate: !unavailable
-          }));
+        month = (await monthLabel.innerText()).trim();
+        if (month !== "NOVEMBER 2026") {
+          console.log("対象月ではないためスキップ:", target.name, month);
+          continue;
         }
 
-        console.log("予約ページ:", target.url);
-      } catch (e) {
-        console.log("ERROR:", e.message);
+        const days = page.locator(".date-cal ul.days li.day");
+        const count = await days.count();
+
+        for (let i = 0; i < count; i++) {
+          const dayEl = days.nth(i);
+          const dayText = (await dayEl.innerText()).trim();
+          const day = Number(dayText);
+
+          if (!Number.isInteger(day) || day < 15 || day > 22) continue;
+
+          const className = await dayEl.getAttribute("class") || "";
+          const title = await dayEl.getAttribute("title");
+
+          const unavailable =
+            className.includes("inactive") ||
+            className.includes("no-event") ||
+            title === "Seats not available";
+
+          console.log(target.name, "Nov", day, className, title || "");
+
+          if (!unavailable) {
+            found.push({
+              key: `${target.name}|2026-11-${String(day).padStart(2, "0")}`,
+              name: target.name,
+              day,
+              url: target.url,
+              className
+            });
+          }
+        }
       } finally {
         await page.close();
       }
@@ -80,4 +98,36 @@ const TARGETS = [
   } finally {
     await browser.close();
   }
-})();
+
+  const newItems = found.filter(item => !state[item.key]);
+
+  if (newItems.length) {
+    const body = newItems.map(item =>
+      `${item.name}\n2026年11月${item.day}日\n` +
+      `カレンダー状態: ${item.className}\n` +
+      `予約ページ: ${item.url}`
+    ).join("\n\n--------------------\n\n");
+
+    await transporter.sendMail({
+      from: emailUser,
+      to: emailUser,
+      subject: "【空き候補】最後の晩餐 予約カレンダー",
+      text:
+        "予約カレンダーに新しい候補が見つかりました。\n" +
+        "購入可能とは限らないため、ページで確認してください。\n\n" +
+        body
+    });
+
+    console.log("新しい候補をメール通知:", newItems.length);
+  } else {
+    console.log("新しい候補はありません");
+  }
+
+  for (const item of found) state[item.key] = true;
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+main().catch(error => {
+  console.error(error);
+  process.exit(1);
+});
