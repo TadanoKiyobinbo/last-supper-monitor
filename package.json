@@ -1,0 +1,12 @@
+
+{
+  "name": "last-supper-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "check": "node monitor.js"
+  },
+  "dependencies": {
+    "playwright": "1.55.0"
+  }
+}
