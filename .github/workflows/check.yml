@@ -47,40 +47,9 @@ jobs:
           ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
           ALERT_APP_PASSWORD: ${{ secrets.ALERT_APP_PASSWORD }}
 
-      - name: Test email delivery
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
-          ALERT_APP_PASSWORD: ${{ secrets.ALERT_APP_PASSWORD }}
-        run: |
-          node <<'NODE'
-          const nodemailer = require("nodemailer");
-
-          async function main() {
-            const email = process.env.ALERT_EMAIL;
-            const password = process.env.ALERT_APP_PASSWORD;
-
-            if (!email || !password) {
-              throw new Error("メール用Secretsが設定されていません");
-            }
-
-            const transporter = nodemailer.createTransport({
-              service: "gmail",
-              auth: { user: email, pass: password }
-            });
-
-            await transporter.sendMail({
-              from: email,
-              to: email,
-              subject: "【テスト】最後の晩餐 空き状況モニター",
-              text: "テストメールです。GitHub Actionsからのメール送信に成功しました。"
-            });
-
-            console.log("テストメールを送信しました");
-          }
-
-          main().catch(error => {
-            console.error(error);
-            process.exit(1);
-          });
-          NODE
+      - name: Save notification state
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: last-supper-state-${{ github.run_id }}
