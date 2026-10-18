@@ -1,4 +1,3 @@
-
 const { chromium } = require("playwright");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
@@ -15,7 +14,8 @@ const TARGETS = [
 ];
 
 const STATE_FILE = "state.json";
-const state = fs.existsSync(STATE_FILE)
+
+const previousState = fs.existsSync(STATE_FILE)
   ? JSON.parse(fs.readFileSync(STATE_FILE, "utf8"))
   : {};
 
@@ -33,6 +33,7 @@ async function main() {
   });
 
   const browser = await chromium.launch({ headless: true });
+  const currentState = {};
   const found = [];
 
   try {
@@ -49,16 +50,15 @@ async function main() {
         const monthLabel = page.locator(".date-cal .month li.name").first();
         let month = (await monthLabel.innerText()).trim();
 
-        // 10月なら11月へ。11月なら初期表示のまま。
         if (month === "OCTOBER 2026") {
           await page.locator(".date-cal .month li.next a").first().click();
           await page.waitForTimeout(1500);
         }
 
         month = (await monthLabel.innerText()).trim();
+
         if (month !== "NOVEMBER 2026") {
-          console.log("対象月ではないためスキップ:", target.name, month);
-          continue;
+          throw new Error(`${target.name}: 2026年11月のカレンダーを確認できません (${month})`);
         }
 
         const days = page.locator(".date-cal ul.days li.day");
@@ -74,60 +74,20 @@ async function main() {
           const className = await dayEl.getAttribute("class") || "";
           const title = await dayEl.getAttribute("title");
 
+          console.log(target.name, "Nov", day, className, title || "");
+
           const unavailable =
             className.includes("inactive") ||
             className.includes("no-event") ||
             title === "Seats not available";
 
-          console.log(target.name, "Nov", day, className, title || "");
+          const key = `${target.name}|2026-11-${String(day).padStart(2, "0")}`;
+
+          // 現在の状態を保存。読み取りが不明な日は候補扱いしない。
+          currentState[key] = !unavailable;
 
           if (!unavailable) {
             found.push({
-              key: `${target.name}|2026-11-${String(day).padStart(2, "0")}`,
+              key,
               name: target.name,
-              day,
-              url: target.url,
-              className
-            });
-          }
-        }
-      } finally {
-        await page.close();
-      }
-    }
-  } finally {
-    await browser.close();
-  }
-
-  const newItems = found.filter(item => !state[item.key]);
-
-  if (newItems.length) {
-    const body = newItems.map(item =>
-      `${item.name}\n2026年11月${item.day}日\n` +
-      `カレンダー状態: ${item.className}\n` +
-      `予約ページ: ${item.url}`
-    ).join("\n\n--------------------\n\n");
-
-    await transporter.sendMail({
-      from: emailUser,
-      to: emailUser,
-      subject: "【空き候補】最後の晩餐 予約カレンダー",
-      text:
-        "予約カレンダーに新しい候補が見つかりました。\n" +
-        "購入可能とは限らないため、ページで確認してください。\n\n" +
-        body
-    });
-
-    console.log("新しい候補をメール通知:", newItems.length);
-  } else {
-    console.log("新しい候補はありません");
-  }
-
-  for (const item of found) state[item.key] = true;
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
-}
-
-main().catch(error => {
-  console.error(error);
-  process.exit(1);
-});
+              day
