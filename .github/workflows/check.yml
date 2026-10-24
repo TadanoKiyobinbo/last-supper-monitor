@@ -1,9 +1,10 @@
+
 name: Last Supper Monitor
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "7,22,37,52 * * * *"
+    - cron: "3-58/5 * * * *"
 
 permissions:
   contents: read
