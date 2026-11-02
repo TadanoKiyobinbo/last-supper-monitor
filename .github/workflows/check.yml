@@ -26,9 +26,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: state.json
-          key: last-supper-state-${{ github.run_id }}
+          key: last-supper-state-v2-${{ github.run_id }}
           restore-keys: |
-            last-supper-state-
+            last-supper-state-v2-
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -52,4 +52,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: state.json
-          key: last-supper-state-${{ github.run_id }}
+          key: last-supper-state-v2-${{ github.run_id }}
