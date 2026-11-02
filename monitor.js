@@ -104,14 +104,12 @@ async function main() {
     await browser.close();
   }
 
-  // 今回初めて空き候補になった日だけ通知する。
-  // 前回 state.json がない場合は、初回通知を避けるため通知しない。
-  const hasPreviousState = Object.keys(previousState).length > 0;
-
+  // 前回は空き候補ではなかった日、または
+  // 前回の状態が記録されていない日に通知する。
   const newItems = found.filter(item =>
-    hasPreviousState && previousState[item.key] === false
+    previousState[item.key] !== true
   );
-
+ 
   if (newItems.length) {
     const body = newItems.map(item =>
       `${item.name}\n2026年11月${item.day}日\n` +
