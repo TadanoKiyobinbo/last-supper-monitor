@@ -2,7 +2,6 @@
 const { chromium } = require("playwright");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
-const path = require("path");
 
 const TARGETS = [
   {
@@ -15,28 +14,12 @@ const TARGETS = [
   }
 ];
 
-const STATE_FILE = path.join(process.cwd(), "state.json");
-const TARGET_DAYS = Array.from({ length: 8 }, (_, i) => i + 15);
+const TARGET_DAYS = [15, 16, 17, 18, 19, 20, 21, 22];
+const STATE_FILE = "state.json";
 
-function loadPreviousState() {
-  if (!fs.existsSync(STATE_FILE)) return {};
-
-  const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("state.json の形式が正しくありません。状態を消さずに停止します。");
-  }
-
-  for (const [key, value] of Object.entries(parsed)) {
-    if (typeof value !== "boolean") {
-      throw new Error(`state.json の値が不正です: ${key}`);
-    }
-  }
-
-  return parsed;
-}
-
-const previousState = loadPreviousState();
+const previousState = fs.existsSync(STATE_FILE)
+  ? JSON.parse(fs.readFileSync(STATE_FILE, "utf8"))
+  : {};
 
 async function inspectTarget(browser, target) {
   const page = await browser.newPage();
@@ -58,6 +41,10 @@ async function inspectTarget(browser, target) {
       month = (await monthLabel.innerText({ timeout: 15000 })).trim();
     }
 
+    console.log("===== カレンダー調査開始 =====");
+    console.log("対象ページ:", target.name);
+    console.log("月表示:", month);
+
     if (month !== "NOVEMBER 2026") {
       throw new Error(
         `${target.name}: 2026年11月のカレンダーを確認できません (${month})`
@@ -66,6 +53,22 @@ async function inspectTarget(browser, target) {
 
     const days = page.locator(".date-cal ul.days li.day");
     const count = await days.count();
+
+    console.log("日付要素の数:", count);
+
+    // 調査用ログ：カレンダーから読み取った全日付を表示
+    for (let i = 0; i < count; i++) {
+      const el = days.nth(i);
+
+      console.log("日付要素:", {
+        text: (await el.innerText()).trim(),
+        class: await el.getAttribute("class"),
+        title: await el.getAttribute("title")
+      });
+    }
+
+    console.log("===== カレンダー調査終了 =====");
+
     const observed = new Map();
 
     for (let i = 0; i < count; i++) {
@@ -167,8 +170,7 @@ async function main() {
     );
   }
 
-  // 正常に読み取れたチケットだけ更新。
-  // 失敗したチケットは前回状態を保持する。
+  // 正常に読み取れたチケットだけ更新
   const currentState = { ...previousState };
 
   for (const item of observations) {
@@ -182,8 +184,7 @@ async function main() {
     );
   }
 
-  // 前回 false から今回 true になった場合だけ通知。
-  // 未記録のキーは初回の大量通知を避けるため通知しない。
+  // 前回 false から今回 true になった場合だけ通知
   const newItems = observations.filter(item =>
     item.availableCandidate && previousState[item.key] === false
   );
@@ -218,7 +219,7 @@ async function main() {
     console.log("新しい空き候補はありません");
   }
 
-  // メール送信成功後に状態ファイルを原子的に更新する。
+  // メール送信成功後に状態ファイルを更新
   const tempFile = `${STATE_FILE}.tmp`;
 
   fs.writeFileSync(
@@ -227,6 +228,8 @@ async function main() {
   );
 
   fs.renameSync(tempFile, STATE_FILE);
+
+  console.log("状態ファイルを保存しました");
 }
 
 main().catch(error => {
