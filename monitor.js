@@ -74,8 +74,8 @@ async function inspectTarget(browser, target) {
     for (let i = 0; i < count; i++) {
       const dayEl = days.nth(i);
       const dayText = (await dayEl.innerText()).trim();
-      const day = Number(dayText);
-
+      const day = Number(dayText.split(/\s+/)[0]);
+      
       if (!Number.isInteger(day) || !TARGET_DAYS.includes(day)) continue;
 
       if (observed.has(day)) {
