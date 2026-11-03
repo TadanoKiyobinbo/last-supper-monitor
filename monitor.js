@@ -1,25 +1,34 @@
 
 const { chromium } = require("playwright");
-const nodemailer = require("nodemailer");
 const fs = require("fs");
+
+const TARGET_DAYS = [15, 16, 17, 18, 19, 20, 21, 22];
 
 const TARGETS = [
   {
-    name: "Admission Ticket — 入場券のみ",
+    name: "Admission Ticket",
     url: "https://cenacolovinciano.vivaticket.it/en/event/cenacolo-vinciano/151991"
   },
   {
-    name: "English Guided Tours — 英語ガイド付き",
+    name: "English Guided Tours",
     url: "https://cenacolovinciano.vivaticket.it/en/event/cenacolo-visite-guidate-a-orario-fisso-in-inglese/238363"
   }
 ];
 
-const TARGET_DAYS = [15, 16, 17, 18, 19, 20, 21, 22];
 const STATE_FILE = "state.json";
 
-const previousState = fs.existsSync(STATE_FILE)
-  ? JSON.parse(fs.readFileSync(STATE_FILE, "utf8"))
-  : {};
+function loadState() {
+  if (!fs.existsSync(STATE_FILE)) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+  } catch (error) {
+    console.error("状態ファイルの読み込みに失敗しました:", error);
+    throw error;
+  }
+}
 
 async function inspectTarget(browser, target) {
   const page = await browser.newPage();
@@ -33,17 +42,19 @@ async function inspectTarget(browser, target) {
     await page.waitForTimeout(3000);
 
     const monthLabel = page.locator(".date-cal .month li.name").first();
-    let month = (await monthLabel.innerText({ timeout: 15000 })).trim();
+
+    let month = (await monthLabel.innerText({
+      timeout: 15000
+    })).trim();
 
     if (month === "OCTOBER 2026") {
       await page.locator(".date-cal .month li.next a").first().click();
       await page.waitForTimeout(2000);
-      month = (await monthLabel.innerText({ timeout: 15000 })).trim();
-    }
 
-    console.log("===== カレンダー調査開始 =====");
-    console.log("対象ページ:", target.name);
-    console.log("月表示:", month);
+      month = (await monthLabel.innerText({
+        timeout: 15000
+      })).trim();
+    }
 
     if (month !== "NOVEMBER 2026") {
       throw new Error(
@@ -54,29 +65,17 @@ async function inspectTarget(browser, target) {
     const days = page.locator(".date-cal ul.days li.day");
     const count = await days.count();
 
-    console.log("日付要素の数:", count);
-
-    // 調査用ログ：カレンダーから読み取った全日付を表示
-    for (let i = 0; i < count; i++) {
-      const el = days.nth(i);
-
-      console.log("日付要素:", {
-        text: (await el.innerText()).trim(),
-        class: await el.getAttribute("class"),
-        title: await el.getAttribute("title")
-      });
-    }
-
-    console.log("===== カレンダー調査終了 =====");
-
     const observed = new Map();
 
     for (let i = 0; i < count; i++) {
       const dayEl = days.nth(i);
+
       const dayText = (await dayEl.innerText()).trim();
       const day = Number(dayText.split(/\s+/)[0]);
-      
-      if (!Number.isInteger(day) || !TARGET_DAYS.includes(day)) continue;
+
+      if (!Number.isInteger(day) || !TARGET_DAYS.includes(day)) {
+        continue;
+      }
 
       if (observed.has(day)) {
         throw new Error(
@@ -87,14 +86,19 @@ async function inspectTarget(browser, target) {
       const className = (await dayEl.getAttribute("class")) || "";
       const title = await dayEl.getAttribute("title");
 
-      observed.set(day, { className, title });
+      observed.set(day, {
+        className,
+        title
+      });
     }
 
-    const missingDays = TARGET_DAYS.filter(day => !observed.has(day));
+    const missingDays = TARGET_DAYS.filter(
+      day => !observed.has(day)
+    );
 
     if (missingDays.length > 0) {
       throw new Error(
-        `${target.name}: 11月${missingDays.join("・")}日の表示を確認できません。誤判定防止のため状態を更新しません。`
+        `${target.name}: 11月${missingDays.join("・")}日の表示を確認できません。状態を更新しません。`
       );
     }
 
@@ -102,13 +106,6 @@ async function inspectTarget(browser, target) {
 
     for (const day of TARGET_DAYS) {
       const { className, title } = observed.get(day);
-
-      console.log(
-        target.name,
-        `Nov ${day}`,
-        className,
-        title || ""
-      );
 
       const unavailable =
         className.includes("inactive") ||
@@ -125,114 +122,134 @@ async function inspectTarget(browser, target) {
       });
     }
 
+    console.log(`${target.name}: 11月15日〜22日の確認完了`);
+
     return result;
   } finally {
     await page.close();
   }
 }
 
-async function main() {
-  const emailUser = process.env.ALERT_EMAIL;
-  const emailPassword = process.env.ALERT_APP_PASSWORD;
+async function sendEmail(items) {
+  const nodemailer = require("nodemailer");
 
-  if (!emailUser || !emailPassword) {
-    throw new Error(
-      "GitHub Secrets の ALERT_EMAIL / ALERT_APP_PASSWORD が未設定です"
-    );
+  const email = process.env.ALERT_EMAIL;
+  const password = process.env.ALERT_APP_PASSWORD;
+
+  if (!email || !password) {
+    throw new Error("メール通知用のSecretsが設定されていません");
   }
 
-  const browser = await chromium.launch({ headless: true });
-  let observations = [];
-  const failedTargets = [];
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      user: email,
+      pass: password
+    }
+  });
+
+  const lines = items.map(item => {
+    return [
+      `・${item.name}`,
+      `  2026年11月${item.day}日`,
+      `  ${item.url}`
+    ].join("\n");
+  });
+
+  await transporter.sendMail({
+    from: email,
+    to: email,
+    subject: "【空席候補を検知】最後の晩餐 予約状況",
+    text: [
+      "最後の晩餐の予約カレンダーに変化がありました。",
+      "",
+      "以下の日付が空席候補として検出されました。",
+      "",
+      ...lines,
+      "",
+      "実際の予約可能状況は公式サイトで確認してください。"
+    ].join("\n")
+  });
+
+  console.log(`通知メールを送信しました: ${items.length}件`);
+}
+
+async function main() {
+  const email = process.env.ALERT_EMAIL;
+  const password = process.env.ALERT_APP_PASSWORD;
+
+  if (!email || !password) {
+    throw new Error("ALERT_EMAIL または ALERT_APP_PASSWORD が未設定です");
+  }
+
+  const previousState = loadState();
+  const currentState = { ...previousState };
+
+  const browser = await chromium.launch({
+    headless: true
+  });
+
+  let allResults = [];
+  let successfulTargets = 0;
 
   try {
     for (const target of TARGETS) {
       try {
-        const targetResults = await inspectTarget(browser, target);
-        observations = observations.concat(targetResults);
+        const results = await inspectTarget(browser, target);
+
+        allResults.push(...results);
+        successfulTargets++;
       } catch (error) {
-        failedTargets.push(`${target.name}: ${error.message}`);
-        console.error(
-          "対象ページの確認に失敗。前回状態を保持します:",
-          target.name,
-          error
-        );
+        console.error(`${target.name} の調査に失敗しました:`, error.message);
       }
     }
   } finally {
     await browser.close();
   }
 
-  if (observations.length === 0) {
+  if (successfulTargets === 0 || allResults.length === 0) {
     throw new Error(
-      "すべての予約ページの確認に失敗しました。state.json は更新しません。\n" +
-      failedTargets.join("\n")
+      "すべての対象ページの調査に失敗しました。状態ファイルは更新しません。"
     );
   }
 
-  // 正常に読み取れたチケットだけ更新
-  const currentState = { ...previousState };
+  const notifications = [];
 
-  for (const item of observations) {
+  for (const item of allResults) {
+    const previousValue = previousState[item.key];
+
+    if (
+      item.availableCandidate &&
+      previousValue === false
+    ) {
+      notifications.push(item);
+    }
+
     currentState[item.key] = item.availableCandidate;
   }
 
-  if (failedTargets.length > 0) {
-    console.warn(
-      "一部の予約ページを確認できませんでした。該当ページの状態は保持します。",
-      failedTargets.join(" | ")
-    );
-  }
-
-  // 前回 false から今回 true になった場合だけ通知
-  const newItems = observations.filter(item =>
-    item.availableCandidate && previousState[item.key] === false
-  );
-
-  if (newItems.length > 0) {
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: emailUser,
-        pass: emailPassword
-      }
-    });
-
-    const body = newItems.map(item =>
-      `${item.name}\n2026年11月${item.day}日\n` +
-      `カレンダー状態: ${item.className}\n` +
-      `予約ページ: ${item.url}`
-    ).join("\n\n--------------------\n\n");
-
-    await transporter.sendMail({
-      from: emailUser,
-      to: emailUser,
-      subject: "【空き候補】最後の晩餐 予約カレンダー",
-      text:
-        "前回は空き候補がなかった日について、新しい候補が見つかりました。\n" +
-        "購入可能とは限らないため、予約ページで至急確認してください。\n\n" +
-        body
-    });
-
-    console.log("新しい空き候補をメール通知:", newItems.length);
+  if (notifications.length > 0) {
+    await sendEmail(notifications);
   } else {
-    console.log("新しい空き候補はありません");
+    console.log("新しい空席候補はありません。");
   }
 
-  // メール送信成功後に状態ファイルを更新
   const tempFile = `${STATE_FILE}.tmp`;
 
   fs.writeFileSync(
     tempFile,
-    JSON.stringify(currentState, null, 2)
+    JSON.stringify(currentState, null, 2),
+    "utf8"
   );
 
   fs.renameSync(tempFile, STATE_FILE);
 
-  console.log("状態ファイルを保存しました");
+  console.log(
+    `状態を保存しました。調査成功: ${successfulTargets}/${TARGETS.length}ページ`
+  );
 }
 
 main().catch(error => {
-  console.error(error);
+  console.error("監視処理でエラーが発生しました:", error);
   process.exit(1);
 });
